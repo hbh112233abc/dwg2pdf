@@ -4,8 +4,9 @@ build-backend = "maturin"
 
 [project]
 name = "dwg2pdf"
-version = "0.1.1"
+version = "0.1.2"
 description = "DWG 工程图纸解析：图框识别、图签/图纸目录提取与逐图框 PDF 导出"
+readme = "README.md"
 requires-python = ">=3.8"
 
 [tool.maturin]
