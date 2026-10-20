@@ -219,6 +219,69 @@ DWG2PDF_DEBUG=1 target/release/dwg2pdf frames drawing.dwg
 cargo test
 ```
 
+## 发布流程
+
+发布由 [.github/workflows/release.yml](.github/workflows/release.yml) 全自动完成：**推 tag 即发版**，无需手动改版本号、无需在网页上创建 Release。
+
+### 三步操作
+
+```bash
+# 1) 改代码，本地自测
+cargo test
+
+# 2) 提交推送到 main
+git add -A
+git commit -m "feat: xxx"
+git push origin main
+
+# 3) 打 tag 并推送（此步之后全自动，约 4 分钟）
+git tag 0.1.6
+git push origin 0.1.6
+```
+
+**版本号由 tag 决定**：各构建任务会先把 `Cargo.toml` / `pyproject.toml` / `Cargo.lock` 的 version 改写为 tag 名（`.github/actions/sync-version`）再构建，所以仓库里的版本号无需手动维护。
+
+### CI 自动做的事
+
+| 顺序 | 任务 | 作用 |
+| --- | --- | --- |
+| 1 | `create release` | `gh release create` 自动创建 Release（含自动生成的 changelog） |
+| 2 | `wheels` ×5 | maturin 构建 Windows / macOS(x86_64, arm64) / Linux(x86_64, aarch64) 五个平台的 wheel（`abi3-py38`，兼容 Python 3.8+） |
+| 3 | `sdist` | 源码包 `.tar.gz` |
+| 4 | `cli` ×5 | 五个平台的 CLI 可执行文件压缩包 + sha256（Linux 为 musl 静态链接） |
+| 5 | `publish assets` | 汇总 wheel 与 sdist 上传到 Release |
+| 6 | `publish to PyPI` | 发布 wheel + sdist 到 PyPI（`skip-existing`，重跑不会因已存在而失败） |
+| 7 | `sync version to main` | 把版本号提交回 main（`chore: 同步版本号至 x.y.z`） |
+
+### 发布后收尾
+
+```bash
+git pull --ff-only origin main   # 拉下机器人那条版本号提交
+```
+
+核对三处结果：
+
+- Actions：<https://github.com/hbh112233abc/dwg2pdf/actions>
+- Release：<https://github.com/hbh112233abc/dwg2pdf/releases>
+- PyPI：<https://pypi.org/project/dwg2pdf/>
+
+### 注意事项
+
+- **必须先推 main 再打 tag**。回写 main 有前置判断：仅当 tag 指向 main 顶端时才提交，否则只输出一条 `::notice::` 跳过（避免在旧基线上提交、覆盖 main 上更新的版本号）。
+- **tag 名必须是 `x.y.z`**，形如 `v0.1.6`、`0.1.6-beta` 会被 `sync-version` 判为非法并终止。
+- **版本号只能递增、不可复用**，PyPI 不允许覆盖已发布的版本号。
+- 推 tag 与「在网页上发布 Release」两个触发条件并存，同一 tag 由 `concurrency` 归组，不会重复构建。
+
+### 常见问题
+
+| 现象 | 处理 |
+| --- | --- |
+| 构建任务失败 | 进 Actions 该 run → **Re-run failed jobs**（已发布到 PyPI 的部分会 skip） |
+| 改完代码想重发同一版本 | 换个新 tag（如 `0.1.6`），不能复用旧版本号 |
+| 未回写 main（日志有 `::notice::`） | tag 未指向 main 顶端；在 main 顶端重新打 tag，或手动改三处版本号提交 |
+| 回写失败（如 main 有分支保护） | 该任务只给 `::warning::` 不会失败，产物已正常发布，手动改版本号提交即可 |
+| 需删除误发布的 tag | `git push origin :refs/tags/0.1.6` 加 `git tag -d 0.1.6`；GitHub Release 需在网页删除（PyPI 版本只能 yank，不能删除） |
+
 ## 已知限制
 
 - 未内置字体，依赖系统存在中文字体（自动探测，可用 `DWG2PDF_FONT` 指定）；PDF 以 `FontFile2` 内嵌 TrueType 轮廓，对 CFF/OTF 轮廓字体或 `.ttc` 字体集合支持有限，建议提供 `.ttf`。
