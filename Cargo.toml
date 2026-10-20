@@ -1,0 +1,21 @@
+[package]
+name = "dwg2pdf"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "dwg2pdf"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "dwg2pdf"
+path = "src/main.rs"
+
+[dependencies]
+acadrust = "0.6.5"
+ttf-parser = "0.25.1"
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py38"], optional = true }
+
+[features]
+default = []
+python = ["dep:pyo3"]

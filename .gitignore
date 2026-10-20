@@ -1,0 +1,11 @@
+/target
+/.venv
+__pycache__/
+*.py[cod]
+/dist
+*.whl
+
+# 生成的 PDF 与调试输出
+/out*.pdf
+err.txt
+lay_jgkx.txt

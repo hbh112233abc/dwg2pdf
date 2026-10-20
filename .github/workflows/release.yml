@@ -1,0 +1,137 @@
+name: Release
+
+# 发布 GitHub Release 时自动构建多平台产物：
+#   - Python wheels（maturin，多平台）
+#   - 源码包 sdist
+#   - 各平台 CLI 可执行文件
+# 全部作为附件上传到该 Release，并把 wheels + sdist 发布到 PyPI。
+#
+# 需要配置的 secret：PYPI_API_TOKEN（PyPI 的 API Token）。
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: dwg2pdf
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Python wheels（maturin）
+  # ---------------------------------------------------------------------------
+  wheels:
+    name: wheels / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64, manylinux: manylinux2014 }
+          - { os: ubuntu-latest, target: aarch64, manylinux: manylinux2014 }
+          - { os: macos-latest, target: x86_64 }
+          - { os: macos-latest, target: aarch64 }
+          - { os: windows-latest, target: x64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 源码包 sdist（pip 可基于源码构建）
+  # ---------------------------------------------------------------------------
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 各平台 CLI 可执行文件
+  # 说明：Linux 使用 musl 静态链接；aarch64 由 ubuntu-latest 交叉编译。
+  # ---------------------------------------------------------------------------
+  cli:
+    name: cli / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-latest, target: aarch64-unknown-linux-musl }
+          - { os: macos-latest, target: x86_64-apple-darwin }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # 构建并直接上传压缩包（含 sha256）到当前 Release
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: ${{ env.BIN_NAME }}
+          target: ${{ matrix.target }}
+          archive: ${{ env.BIN_NAME }}-$target
+          checksum: sha256
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # 汇总 wheels + sdist 上传到 Release（CLI 已由上面的 action 直接上传）
+  # ---------------------------------------------------------------------------
+  publish:
+    name: publish assets
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          tag_name: ${{ github.event.release.tag_name }}
+
+  # ---------------------------------------------------------------------------
+  # 发布到 PyPI（wheels + sdist）
+  # 使用仓库 secret：PYPI_API_TOKEN
+  # ---------------------------------------------------------------------------
+  pypi:
+    name: publish to PyPI
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/dwg2pdf
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
