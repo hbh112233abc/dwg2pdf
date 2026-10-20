@@ -6,10 +6,22 @@ name: Release
 #   - 各平台 CLI 可执行文件
 # 全部作为附件上传到该 Release，并把 wheels + sdist 发布到 PyPI。
 #
+# 触发方式（二选一即可，同一 tag 同时命中时由 concurrency 合并）：
+#   1) 推送 tag（形如 0.1.3）：git push origin 0.1.3 —— 推荐，全自动
+#   2) 在 GitHub 网页上发布 Release（兼容原来的手动流程）
+#
 # 需要配置的 secret：PYPI_API_TOKEN（PyPI 的 API Token）。
 on:
+  push:
+    tags:
+      - "*.*.*"
   release:
     types: [published]
+
+# 推 tag 会同时产生 push 与 release(published) 两个事件，归到同一组避免重复构建
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -20,11 +32,26 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # 先创建 Release：后续 job 只负责往里追加产物
+  # （多个 action 都会「没有就创建」，并发创建会互相冲突，这里统一收口）
+  # ---------------------------------------------------------------------------
+  create-release:
+    name: create release
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+
+  # ---------------------------------------------------------------------------
   # Python wheels（maturin）
   # ---------------------------------------------------------------------------
   wheels:
     name: wheels / ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: [create-release]
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +80,7 @@ jobs:
   sdist:
     name: sdist
     runs-on: ubuntu-latest
+    needs: [create-release]
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
@@ -72,6 +100,7 @@ jobs:
   cli:
     name: cli / ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: [create-release]
     strategy:
       fail-fast: false
       matrix:
@@ -103,7 +132,7 @@ jobs:
   # ---------------------------------------------------------------------------
   publish:
     name: publish assets
-    needs: [wheels, sdist]
+    needs: [create-release, wheels, sdist]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -113,7 +142,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          tag_name: ${{ github.event.release.tag_name }}
+          # push tag 触发时没有 github.event.release，统一用 ref_name（两种事件下都是 tag 名）
+          tag_name: ${{ github.ref_name }}
 
   # ---------------------------------------------------------------------------
   # 发布到 PyPI（wheels + sdist）
