@@ -10,3 +10,6 @@ __pycache__/
 /out*.pdf
 err.txt
 lay_jgkx.txt
+
+# 本地规划/AI 助手文档
+/.trae
