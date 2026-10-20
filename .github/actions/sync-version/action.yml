@@ -1,5 +1,5 @@
 name: sync version from tag
-description: 用触发本次 workflow 的 tag 名覆盖 Cargo.toml / pyproject.toml 的 version，使构建产物版本与 tag 始终一致
+description: 用触发本次 workflow 的 tag 名覆盖 Cargo.toml / pyproject.toml / Cargo.lock 中本包的 version，使构建产物与仓库版本号都与 tag 一致
 
 runs:
   using: composite
@@ -17,10 +17,21 @@ runs:
             ;;
         esac
 
-        # Cargo.lock 不用改：cargo 构建时会自行刷新本地包的版本条目
         # -i.bak 是 GNU sed 与 macOS(BSD) sed 都支持的写法，之后删掉备份
         sed -i.bak -E "s|^version = \".*\"|version = \"${tag}\"|" Cargo.toml pyproject.toml
         rm -f Cargo.toml.bak pyproject.toml.bak
+
+        # Cargo.lock 里也有本包条目：只改 [[package]] 下 name = "dwg2pdf" 紧随的 version 行，
+        # 不影响任何依赖
+        if [ -f Cargo.lock ]; then
+          awk -v ver="${tag}" '
+            /^\[\[package\]\]/ { hit = 0 }
+            /^name = "dwg2pdf"$/ { hit = 1 }
+            hit && /^version = / { sub(/version = ".*"/, "version = \"" ver "\""); hit = 0 }
+            { print }
+          ' Cargo.lock > Cargo.lock.tmp
+          mv Cargo.lock.tmp Cargo.lock
+        fi
 
         for f in Cargo.toml pyproject.toml; do
           grep -q "^version = \"${tag}\"" "$f" || {
@@ -28,5 +39,13 @@ runs:
             exit 1
           }
         done
+        if [ -f Cargo.lock ]; then
+          grep -A1 '^name = "dwg2pdf"$' Cargo.lock | grep -q "^version = \"${tag}\"" || {
+            echo "::error::Cargo.lock 版本同步失败"
+            exit 1
+          }
+        fi
+
         echo "版本号已同步为 ${tag}："
         grep -H '^version = ' Cargo.toml pyproject.toml
+        grep -A1 '^name = "dwg2pdf"$' Cargo.lock

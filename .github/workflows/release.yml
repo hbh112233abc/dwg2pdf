@@ -7,7 +7,8 @@ name: Release
 # 全部作为附件上传到该 Release，并把 wheels + sdist 发布到 PyPI。
 #
 # 版本号以 tag 为准：各构建 job 在 checkout 后调用 .github/actions/sync-version
-# 把 Cargo.toml / pyproject.toml 的 version 改成 tag 名，因此发版无需手动改版本号。
+# 把 Cargo.toml / pyproject.toml / Cargo.lock 的 version 改成 tag 名，因此发版无需
+# 手动改版本号；发布成功后 commit-back job 再把这份版本号提交回 main，使仓库不滞后。
 #
 # 触发方式（二选一即可，同一 tag 同时命中时由 concurrency 合并）：
 #   1) 推送 tag（形如 0.1.3）：git push origin 0.1.3 —— 推荐，全自动
@@ -173,3 +174,54 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           skip-existing: true
+
+  # ---------------------------------------------------------------------------
+  # 发布成功后把版本号回写到 main，使仓库中的 Cargo.toml / pyproject.toml /
+  # Cargo.lock 与已发布的 tag 对齐（否则仓库里的版本号会一直滞后于 tag）。
+  #
+  # 仅当 tag 正好指向 main 顶端时才回写：这样是在 tag 内容之上追加一个纯版本号提交，
+  # 不会覆盖 main 上可能更新的版本号。
+  # 注：GITHUB_TOKEN 的推送不会再触发 workflow（GitHub 会忽略），不会形成回环。
+  # ---------------------------------------------------------------------------
+  commit-back:
+    name: sync version to main
+    needs: [publish, pypi]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: 判断 tag 是否指向 main 顶端
+        id: guard
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          tag_sha=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
+          main_sha=$(git rev-parse HEAD)
+          echo "tag ${GITHUB_REF_NAME} -> ${tag_sha}"
+          echo "main HEAD  -> ${main_sha}"
+          if [ "$tag_sha" != "$main_sha" ]; then
+            echo "::notice::tag 未指向 main 顶端，跳过版本号回写"
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >>"$GITHUB_OUTPUT"
+          fi
+      - if: steps.guard.outputs.skip == 'false'
+        uses: ./.github/actions/sync-version
+      - name: 提交并推送
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "版本号已一致，无需提交"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml pyproject.toml Cargo.lock
+          git commit -m "chore: 同步版本号至 ${GITHUB_REF_NAME}"
+          if ! git push origin HEAD:main; then
+            echo "::warning::回写 main 失败（可能受分支保护限制）；产物已正常发布，仓库版本号暂未同步，可手动执行同样的改动"
+            exit 0
+          fi
+          echo "已回写版本号 ${GITHUB_REF_NAME} 到 main"
