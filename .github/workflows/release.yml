@@ -39,8 +39,10 @@ jobs:
     name: create release
     runs-on: ubuntu-latest
     steps:
+      # gh release 需要仓库上下文：这个 job 没有 checkout，必须显式给 GH_REPO
       - env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
