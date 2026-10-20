@@ -522,7 +522,39 @@ fn export(path: &str, out: &str, font: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-const USAGE: &str = "用法: dwg2pdf <dump|blocks|layers|big|frames|layer|block|texts|ftxts|info|toc|export|font> <file.dwg> [arg]";
+/// 拆分命令：按图框拆分为多个 DWG(或 DXF)
+fn split_cmd(path: &str, out_dir: &str, format: Option<&str>) -> Result<(), String> {
+    let s = api::split_file(path, out_dir, format)?;
+    println!(
+        "共识别 {} 个图框，已写出 {} 个文件 → {}（{} 字节）",
+        s.frames,
+        s.written,
+        out_dir,
+        s.bytes
+    );
+    for f in &s.files {
+        let no = if f.drawing_no.is_empty() { "-" } else { &f.drawing_no };
+        let ti = if f.title.is_empty() { "-" } else { &f.title };
+        println!(
+            "  {} {} {} 实体={} {:.1}KB {}",
+            f.sheet,
+            no,
+            ti,
+            f.entities,
+            f.bytes as f64 / 1024.0,
+            f.path
+        );
+    }
+    if !s.failed.is_empty() {
+        for (label, reason) in &s.failed {
+            eprintln!("  失败 {}: {}", label, reason);
+        }
+        return Err(format!("{} 个图框写出失败", s.failed.len()));
+    }
+    Ok(())
+}
+
+const USAGE: &str = "用法: dwg2pdf <dump|blocks|layers|big|frames|layer|block|texts|ftxts|info|toc|export|split|font> <file.dwg> [arg]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -566,6 +598,11 @@ fn main() -> ExitCode {
             let out = if arg3.is_empty() { "out.pdf" } else { arg3 };
             let font = args.get(4).map(|s| s.as_str()).filter(|s| !s.is_empty());
             export(path, out, font)
+        }
+        "split" => {
+            let out_dir = if arg3.is_empty() { "." } else { arg3 };
+            let format = args.get(4).map(|s| s.as_str()).filter(|s| !s.is_empty());
+            split_cmd(path, out_dir, format)
         }
         "font" => match api::default_font() {
             Some(f) => {

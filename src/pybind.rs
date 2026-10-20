@@ -95,12 +95,47 @@ fn export_pdf<'py>(
     Ok(d.into_any().unbind())
 }
 
+/// 按图框拆分为多个 DWG/DXF：返回 dict 摘要
+#[pyfunction]
+#[pyo3(signature = (dwg_path, out_dir, format=None))]
+fn split_dwg<'py>(
+    py: Python<'py>,
+    dwg_path: &str,
+    out_dir: &str,
+    format: Option<&str>,
+) -> PyResult<Py<PyAny>> {
+    let s = api::split_file(dwg_path, out_dir, format).map_err(rt)?;
+    let d = PyDict::new(py);
+    d.set_item("frames", s.frames)?;
+    d.set_item("written", s.written)?;
+    d.set_item("bytes", s.bytes)?;
+    let files = PyList::empty(py);
+    for f in s.files {
+        let fd = PyDict::new(py);
+        fd.set_item("path", f.path)?;
+        fd.set_item("sheet", f.sheet)?;
+        fd.set_item("drawing_no", f.drawing_no)?;
+        fd.set_item("title", f.title)?;
+        fd.set_item("entities", f.entities)?;
+        fd.set_item("bytes", f.bytes)?;
+        files.append(fd)?;
+    }
+    d.set_item("files", files)?;
+    let failed = PyList::empty(py);
+    for (label, reason) in s.failed {
+        failed.append((label, reason))?;
+    }
+    d.set_item("failed", failed)?;
+    Ok(d.into_any().unbind())
+}
+
 #[pymodule]
 fn dwg2pdf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_frames, m)?)?;
     m.add_function(wrap_pyfunction!(extract_info, m)?)?;
     m.add_function(wrap_pyfunction!(extract_toc, m)?)?;
     m.add_function(wrap_pyfunction!(export_pdf, m)?)?;
+    m.add_function(wrap_pyfunction!(split_dwg, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add("DEFAULT_FONT", api::default_font())?;
     Ok(())

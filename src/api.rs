@@ -5,7 +5,7 @@
 
 use acadrust::{CadDocument, DwgReader};
 
-use crate::{flatten, frames, pdf, title, toc};
+use crate::{flatten, frames, pdf, split, title, toc};
 
 /// 毫米 → PDF 点(1/72 英寸)
 pub const MM_TO_PT: f64 = 72.0 / 25.4;
@@ -241,10 +241,17 @@ pub fn extract_info(path: &str) -> Result<Vec<SheetInfo>, String> {
     let doc = load(path)?;
     let fs = frames::detect_frames(&doc);
     let prims = flatten::flatten_model(&doc);
-    let mut out = Vec::new();
-    for f in &fs {
+    Ok(sheet_infos(&fs, &prims))
+}
+
+/// 图签信息提取（与 `frames::detect_frames` 顺序严格一一对应）。
+///
+/// 独立出来供 `extract_info` 与 `split_file` 复用，避免重复解析 DWG 与重复扁平化。
+fn sheet_infos(fs: &[frames::Frame], prims: &[flatten::Prim]) -> Vec<SheetInfo> {
+    let mut out = Vec::with_capacity(fs.len());
+    for f in fs {
         let bb = (f.bbox.min_x, f.bbox.min_y, f.bbox.max_x, f.bbox.max_y);
-        if toc::extract(&prims, bb).is_some() {
+        if toc::extract(prims, bb).is_some() {
             out.push(SheetInfo {
                 sheet: f.sheet.clone(),
                 is_toc_page: true,
@@ -252,7 +259,7 @@ pub fn extract_info(path: &str) -> Result<Vec<SheetInfo>, String> {
             });
             continue;
         }
-        let si = title::extract(&prims, bb, &f.sheet);
+        let si = title::extract(prims, bb, &f.sheet);
         out.push(SheetInfo {
             sheet: si.sheet,
             drawing_no: si.drawing_no,
@@ -264,7 +271,7 @@ pub fn extract_info(path: &str) -> Result<Vec<SheetInfo>, String> {
             is_toc_page: false,
         });
     }
-    Ok(out)
+    out
 }
 
 /// 提取图纸目录表格（在任一图框内查找）
@@ -331,3 +338,103 @@ pub fn export_file(path: &str, out: &str, font: Option<&str>) -> Result<ExportSu
             .collect(),
     })
 }
+
+/// 拆分后单个文件摘要
+#[derive(Clone, Debug)]
+pub struct SplitFile {
+    /// 输出文件路径
+    pub path: String,
+    /// 图幅名
+    pub sheet: String,
+    /// 图号(取自图签，可能为空)
+    pub drawing_no: String,
+    /// 图名(取自图签，可能为空)
+    pub title: String,
+    /// 保留下来的模型空间实体数
+    pub entities: usize,
+    /// 文件字节数
+    pub bytes: usize,
+}
+
+/// 拆分摘要
+#[derive(Clone, Debug)]
+pub struct SplitSummary {
+    /// 识别到的图框数
+    pub frames: usize,
+    /// 成功写出的文件数
+    pub written: usize,
+    /// 写出总字节数
+    pub bytes: usize,
+    pub files: Vec<SplitFile>,
+    /// 写失败的图框：(标注, 原因)
+    pub failed: Vec<(String, String)>,
+}
+
+/// 按图框拆分为多个 DWG/DXF 文件（`format` 为 None 时默认 dwg）。
+///
+/// 逐个图框「克隆整份文档 → 删除框外实体 → 写出」，图层/块定义/样式全部保留；
+/// 单个图框失败不中断其余图框，失败原因汇总在 [`SplitSummary::failed`]。
+pub fn split_file(path: &str, out_dir: &str, format: Option<&str>) -> Result<SplitSummary, String> {
+    let doc = load(path)?;
+    let fs = frames::detect_frames(&doc);
+    if fs.is_empty() {
+        return Err("未检测到图框，无法拆分".into());
+    }
+    let fmt = split::OutFormat::from_arg(format.unwrap_or(""))?;
+
+    let prims = flatten::flatten_model(&doc);
+    let infos = sheet_infos(&fs, &prims);
+
+    let dir = std::path::Path::new(out_dir);
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败 {}: {}", out_dir, e))?;
+    let dir_abs = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let src_abs = std::fs::canonicalize(path).ok();
+
+    let mut used = std::collections::HashSet::new();
+    let mut files = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+    let mut total_bytes = 0usize;
+
+    for (i, f) in fs.iter().enumerate() {
+        let seq = i + 1;
+        let info = &infos[i];
+        let label = format!("#{} {}", seq, f.label());
+        let stem = split::file_stem(seq, &info.drawing_no, &info.title, &f.sheet);
+        let target = split::unique_path(dir, &stem, fmt.ext(), &mut used);
+
+        // 避免覆盖源文件（同名输出与输入文件重合时跳过该框）
+        if let Some(src) = &src_abs {
+            if target.file_name().is_some_and(|n| dir_abs.join(n) == *src) {
+                failed.push((label, "输出路径与输入文件相同，已跳过".into()));
+                continue;
+            }
+        }
+
+        let pad = f.bbox.w().max(f.bbox.h()) * split::PAD_RATIO;
+        let (sub, _) = split::split_document(&doc, &f.bbox, pad);
+        let entities = sub.model_space_entities().count();
+        match split::write_output(&sub, &target, fmt) {
+            Ok(bytes) => {
+                total_bytes += bytes;
+                files.push(SplitFile {
+                    path: target.to_string_lossy().into_owned(),
+                    sheet: f.sheet.clone(),
+                    drawing_no: info.drawing_no.clone(),
+                    title: info.title.clone(),
+                    entities,
+                    bytes,
+                });
+            }
+            Err(e) => failed.push((label, e)),
+        }
+    }
+
+    Ok(SplitSummary {
+        frames: fs.len(),
+        written: files.len(),
+        bytes: total_bytes,
+        files,
+        failed,
+    })
+}
+

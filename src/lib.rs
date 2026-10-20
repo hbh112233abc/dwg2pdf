@@ -8,6 +8,7 @@ pub mod flatten;
 pub mod frames;
 pub mod geom;
 pub mod pdf;
+pub mod split;
 pub mod title;
 pub mod toc;
 

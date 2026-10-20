@@ -1,6 +1,6 @@
 # dwg2pdf
 
-纯 Rust 实现的 DWG 工程图纸解析与导出工具：**识别图框 → 提取图签/图纸目录 → 按图框逐页导出 PDF**（每页尺寸严格等于对应图幅）。
+纯 Rust 实现的 DWG 工程图纸解析与导出工具：**识别图框 → 提取图签/图纸目录 → 按图框逐页导出 PDF → 按图框拆分成多个 DWG/DXF**（每张图纸一个文件）。
 
 无需 AutoCAD、Ghostscript 等外部二进制，DWG 解析基于 [acadrust](https://crates.io/crates/acadrust)，PDF 由内置的矢量生成器直接产出并内嵌中文字体。
 
@@ -11,6 +11,7 @@
 - **图签提取**：按「标签—值」网格从图框内文本关联出图名、图号、比例、类别、日期等字段。
 - **图纸目录提取**：识别目录表格，按数据坐标聚类得到列边界，输出表头与数据行。
 - **逐图框出图**：单个 DWG 多图框时，一框一页，页尺寸 = 图幅（mm）。
+- **按图框拆分**：把多图框的大 DWG 拆成多个独立 DWG（可选 DXF），文件名用「序号_图号_图名」，图层/块定义/样式全部保留，出图效果与原文一致。
 - **中文 PDF**：走 CIDFontType2 + Identity-H 内嵌 TrueType 字体，中文/符号正常显示。
 - **两种调用方式**：命令行（CLI）与 Python（PyO3 + maturin）。
 
@@ -36,6 +37,9 @@ target/release/dwg2pdf toc drawing.dwg
 
 # 导出 PDF（默认 out.pdf），每页对应一个图框
 target/release/dwg2pdf export drawing.dwg out.pdf
+
+# 按图框拆分成多个 DWG（第 4 个参数可选 dwg/dxf，默认 dwg）
+target/release/dwg2pdf split drawing.dwg out_split
 ```
 
 > 仓库不附带示例图纸（`.dwg` 体积较大），请把上面命令中的 `drawing.dwg` 换成你自己的文件路径；未传路径时会提示「缺少 DWG 文件路径」并打印用法。
@@ -68,6 +72,7 @@ target/release/dwg2pdf export drawing.dwg out.pdf
 | `info <file.dwg>` | 逐图框提取图签信息（目录页自动标记） |
 | `toc <file.dwg>` | 在任一图框内查找并打印图纸目录表 |
 | `export <file.dwg> [out.pdf] [font]` | 按图框逐页导出 PDF（可选指定字体文件） |
+| `split <file.dwg> [out_dir] [dwg\|dxf]` | 按图框拆分成多个 DWG/DXF（目录默认当前目录，格式默认 dwg） |
 | `font` | 打印自动探测到的中文字体路径 |
 
 ## Python 调用（PyO3 + maturin）
@@ -108,6 +113,14 @@ summary = dwg2pdf.export_pdf("drawing.dwg", "out.pdf", font=None)
 print(summary["pages"], summary["bytes"], summary["out_path"])
 for p in summary["details"]:
     print(p["sheet"], p["page_w_mm"], p["page_h_mm"], p["prims"])
+
+# 5) 按图框拆分成多个 DWG -> dict 摘要（format 可选 "dwg"/"dxf"，默认 dwg）
+split = dwg2pdf.split_dwg("drawing.dwg", "out_split", format="dwg")
+print(split["frames"], split["written"], split["bytes"])
+for f in split["files"]:
+    print(f["sheet"], f["drawing_no"], f["title"], f["entities"], f["path"])
+for label, reason in split["failed"]:      # 单个图框失败不影响其余图框
+    print("失败:", label, reason)
 ```
 
 ### Python API
@@ -118,12 +131,13 @@ for p in summary["details"]:
 | `extract_info(path)` | `list[dict]`：图签字段 + `is_toc_page` + `fields`(dict) |
 | `extract_toc(path)` | `dict{headers, rows}` 或 `None` |
 | `export_pdf(dwg_path, out_path, font=None)` | `dict`：`pages / bytes / out_path / details` |
+| `split_dwg(dwg_path, out_dir, format=None)` | `dict`：`frames / written / bytes / files` / `failed` |
 
-`font` 传 `None` 时使用内置字体探测结果（`DEFAULT_FONT`）。
+`font` 传 `None` 时使用内置字体探测结果（`DEFAULT_FONT`）。`split_dwg` 的 `format` 传 `None` 或 `"dwg"` 输出 DWG，传 `"dxf"` 输出 DXF。
 
 ## 工作原理
 
-整体流水线：`DWG → 图框识别 → 矢量扁平化 → 图签/目录提取 → PDF`
+整体流水线：`DWG → 图框识别 → 矢量扁平化 → 图签/目录提取 → PDF / 按图框拆分`
 
 1. **解析**：`acadrust::DwgReader` 读取 DWG，读取模型空间实体时使用 `doc.model_space_entities()`，避免误取块定义内部实体。
 2. **图框识别**（`frames.rs`）：收集闭合 LWPOLYLINE / Polyline2D 候选矩形，按尺寸门槛、长宽比（1.0–4.2）过滤，剔除含于其它图框的内框；再判定图幅与比例。
@@ -138,6 +152,16 @@ for p in summary["details"]:
 - 长边不得短于该幅面标准长边；长边超出则为**加长**，加长量须接近标准长边的 1/8 整数倍，记为 `A1+1/4` 形式。
 - 匹配失败时，若在疑似图框图层上，则遍历 10 的整数幂候选推断比例（短边落在 180–1500mm 且最接近标准短边）。
 
+### 按图框拆分规则
+
+逐图框「克隆整份文档 → 删除不属于该图框的模型空间实体 → 写出」，因此**图层表、块定义、文字/标注样式、布局全部保留**，不做坐标平移。实体归属判定（`split.rs`）：
+
+1. 包围盒与图框有**正的**重叠深度即归属——多张图框常严丝合缝地拼在一张图上，边对边相切（重叠深度为 0）的相邻图框不会被误收；零尺寸包围盒（TEXT/POINT 只有一个锚点）按「锚点落在框内」处理。
+2. 否则看包围盒中心是否落在图框外扩 2%（与 PDF 导出同比例）的范围内，用于保留引出线、索引符号等略微越出边界的图元。
+3. 包围盒无法度量的实体（部分 Hatch/标注等）一律保留，宁可多带也不丢内容。
+
+文件命名为 `序号_图号_图名`（如 `01_结施-01_一层平面图.dwg`），图号/图名缺失时省略对应段、都缺失时回退为图幅（`01_A4.dwg`）；非法字符会被清洗，重名追加 `_2`。输出先写 `xxx.part` 再改名，避免留下半成品。
+
 ## 项目结构
 
 ```
@@ -151,6 +175,7 @@ src/
   flatten.rs   实体 → 矢量图元扁平化
   title.rs     图签信息提取
   toc.rs       图纸目录表提取
+  split.rs     按图框拆分（框外实体剪枝 + DWG/DXF 写出）
   pdf.rs       自研 PDF 生成器
 pyproject.toml maturin 构建配置
 ```
