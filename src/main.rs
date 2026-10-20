@@ -522,12 +522,21 @@ fn export(path: &str, out: &str, font: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
+const USAGE: &str = "用法: dwg2pdf <dump|blocks|layers|big|frames|layer|block|texts|ftxts|info|toc|export|font> <file.dwg> [arg]";
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("dump");
-    let path = args.get(2).map(|s| s.as_str()).unwrap_or("tests/test.dwg");
+    let path = args.get(2).map(|s| s.as_str()).unwrap_or("");
     let arg3 = args.get(3).map(|s| s.as_str()).unwrap_or("");
     let num = |i: usize| args.get(i).and_then(|s| s.parse::<f64>().ok());
+
+    // 不再提供默认示例路径：除 font 外所有命令都必须显式传入 DWG 文件
+    if cmd != "font" && path.is_empty() {
+        eprintln!("错误: 缺少 DWG 文件路径");
+        eprintln!("{}", USAGE);
+        return ExitCode::FAILURE;
+    }
 
     let result: Result<(), String> = match cmd {
         "dump" => dump(path).map_err(|e| e.to_string()),
@@ -570,9 +579,7 @@ fn main() -> ExitCode {
         },
         other => {
             eprintln!("未知命令: {}", other);
-            eprintln!(
-                "用法: dwg2pdf <dump|blocks|layers|big|frames|layer|block|texts|ftxts|info|toc|export|font> <file.dwg> [arg]"
-            );
+            eprintln!("{}", USAGE);
             eprintln!("提示: 设置环境变量 DWG2PDF_DEBUG=1 可输出图框/比例推断的调试日志");
             return ExitCode::FAILURE;
         }

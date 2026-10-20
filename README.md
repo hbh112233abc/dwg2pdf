@@ -26,17 +26,19 @@
 cargo build --release
 
 # 识别图框
-target/release/dwg2pdf frames tests/test.dwg
+target/release/dwg2pdf frames drawing.dwg
 
 # 提取图签信息
-target/release/dwg2pdf info tests/test.dwg
+target/release/dwg2pdf info drawing.dwg
 
 # 提取图纸目录
-target/release/dwg2pdf toc tests/test.dwg
+target/release/dwg2pdf toc drawing.dwg
 
 # 导出 PDF（默认 out.pdf），每页对应一个图框
-target/release/dwg2pdf export tests/test.dwg out.pdf
+target/release/dwg2pdf export drawing.dwg out.pdf
 ```
+
+> 仓库不附带示例图纸（`.dwg` 体积较大），请把上面命令中的 `drawing.dwg` 换成你自己的文件路径；未传路径时会提示「缺少 DWG 文件路径」并打印用法。
 
 导出示例输出：
 
@@ -88,21 +90,21 @@ print(dwg2pdf.__version__)        # 版本号
 print(dwg2pdf.DEFAULT_FONT)       # 自动探测到的中文字体路径
 
 # 1) 图框识别 -> list[dict]
-frames = dwg2pdf.detect_frames("tests/test.dwg")
+frames = dwg2pdf.detect_frames("drawing.dwg")
 for f in frames:
     print(f["sheet"], f["page_w_mm"], f["page_h_mm"], f["units_per_mm"], f["layer"], f["bbox"])
 
 # 2) 图签信息 -> list[dict]（目录页 is_toc_page=True，fields 为「标签->值」字典）
-for si in dwg2pdf.extract_info("tests/test.dwg"):
+for si in dwg2pdf.extract_info("drawing.dwg"):
     print(si["sheet"], si["is_toc_page"], si["drawing_no"], si["title"], si["fields"])
 
 # 3) 图纸目录 -> dict{headers, rows} 或 None
-toc = dwg2pdf.extract_toc("tests/test.dwg")
+toc = dwg2pdf.extract_toc("drawing.dwg")
 print(toc["headers"] if toc else None)
 print(toc["rows"] if toc else None)
 
 # 4) 逐图框导出 PDF -> dict 摘要
-summary = dwg2pdf.export_pdf("tests/test.dwg", "out.pdf", font=None)
+summary = dwg2pdf.export_pdf("drawing.dwg", "out.pdf", font=None)
 print(summary["pages"], summary["bytes"], summary["out_path"])
 for p in summary["details"]:
     print(p["sheet"], p["page_w_mm"], p["page_h_mm"], p["prims"])
@@ -151,7 +153,6 @@ src/
   toc.rs       图纸目录表提取
   pdf.rs       自研 PDF 生成器
 pyproject.toml maturin 构建配置
-tests/test.dwg 示例图纸
 ```
 
 ## 中文字体
@@ -172,9 +173,9 @@ tests/test.dwg 示例图纸
 dwg2pdf font
 
 # 显式指定字体
-DWG2PDF_FONT=/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc dwg2pdf export tests/test.dwg out.pdf
+DWG2PDF_FONT=/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc dwg2pdf export drawing.dwg out.pdf
 # 或直接作为参数
-dwg2pdf export tests/test.dwg out.pdf /path/to/font.ttf
+dwg2pdf export drawing.dwg out.pdf /path/to/font.ttf
 ```
 
 Python 侧：`dwg2pdf.DEFAULT_FONT` 为探测结果，`export_pdf(..., font=None)` 传 `None` 时使用该结果。
@@ -184,7 +185,7 @@ Python 侧：`dwg2pdf.DEFAULT_FONT` 为探测结果，`export_pdf(..., font=None
 设置环境变量 `DWG2PDF_DEBUG=1` 输出图框/比例推断的调试日志（stderr）：
 
 ```bash
-DWG2PDF_DEBUG=1 target/release/dwg2pdf frames tests/test.dwg
+DWG2PDF_DEBUG=1 target/release/dwg2pdf frames drawing.dwg
 ```
 
 ## 测试
