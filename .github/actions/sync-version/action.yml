@@ -1,0 +1,32 @@
+name: sync version from tag
+description: 用触发本次 workflow 的 tag 名覆盖 Cargo.toml / pyproject.toml 的 version，使构建产物版本与 tag 始终一致
+
+runs:
+  using: composite
+  steps:
+    - name: 用 tag 覆盖版本号
+      shell: bash
+      run: |
+        set -euo pipefail
+        tag="${GITHUB_REF_NAME}"
+        case "$tag" in
+          [0-9]*.[0-9]*.[0-9]*) ;;
+          *)
+            echo "::error::tag '$tag' 不是 x.y.z 形式，无法作为版本号"
+            exit 1
+            ;;
+        esac
+
+        # Cargo.lock 不用改：cargo 构建时会自行刷新本地包的版本条目
+        # -i.bak 是 GNU sed 与 macOS(BSD) sed 都支持的写法，之后删掉备份
+        sed -i.bak -E "s|^version = \".*\"|version = \"${tag}\"|" Cargo.toml pyproject.toml
+        rm -f Cargo.toml.bak pyproject.toml.bak
+
+        for f in Cargo.toml pyproject.toml; do
+          grep -q "^version = \"${tag}\"" "$f" || {
+            echo "::error::${f} 版本同步失败"
+            exit 1
+          }
+        done
+        echo "版本号已同步为 ${tag}："
+        grep -H '^version = ' Cargo.toml pyproject.toml
