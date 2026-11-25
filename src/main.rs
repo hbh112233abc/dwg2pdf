@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::process::ExitCode;
 
 use acadrust::entities::EntityType;
-use acadrust::{CadDocument, DwgReader};
+use acadrust::CadDocument;
 
 use dwg2pdf::geom::{entity_world_bbox, insert_world_bbox, BBox};
 use dwg2pdf::{api, flatten, frames, geom, title, toc};
@@ -417,7 +417,7 @@ fn block(path: &str, name: &str) -> acadrust::Result<()> {
 }
 
 fn load(path: &str) -> acadrust::Result<CadDocument> {
-    DwgReader::from_file(path)?.read()
+    api::load_document(path)
 }
 
 // ---------------------------------------------------------------------------

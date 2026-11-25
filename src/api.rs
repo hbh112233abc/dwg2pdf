@@ -3,19 +3,36 @@
 //! 把「解析 → 图框识别 → 图签/目录提取 → 逐图框 PDF 导出」串成可直接调用的
 //! 函数，返回可序列化的数据结构，避免上层重复实现。
 
-use acadrust::{CadDocument, DwgReader};
+use acadrust::{CadDocument, DwgReadOptions, DwgReader};
 
 use crate::{flatten, frames, pdf, split, title, toc};
 
 /// 毫米 → PDF 点(1/72 英寸)
 pub const MM_TO_PT: f64 = 72.0 / 25.4;
 
-/// 解析 DWG 文件
+/// 解析 DWG 文件：严格模式失败时回退到容错模式，跳过个别损坏记录
 pub fn load(path: &str) -> Result<CadDocument, String> {
-    DwgReader::from_file(path)
-        .map_err(|e| e.to_string())?
-        .read()
-        .map_err(|e| e.to_string())
+    load_document(path).map_err(|e| e.to_string())
+}
+
+/// 严格读取 DWG，失败后以容错模式重试并报告跳过的记录数
+pub fn load_document(path: &str) -> acadrust::Result<CadDocument> {
+    match DwgReader::from_file(path)?.read() {
+        Ok(doc) => Ok(doc),
+        Err(err) => {
+            eprintln!("警告: 严格解析失败，改用容错模式重试: {}", err);
+            let mut reader = DwgReader::from_file_with_options(path, DwgReadOptions::failsafe())?;
+            let outcome = reader.read_with_stats()?;
+            let skipped = outcome.stats.skipped_source_records;
+            if skipped > 0 {
+                eprintln!(
+                    "警告: 容错模式跳过 {} 条无法解析的记录，图纸内容可能不完整",
+                    skipped
+                );
+            }
+            Ok(outcome.document)
+        }
+    }
 }
 
 /// 显式指定字体文件的环境变量（最高优先级）
